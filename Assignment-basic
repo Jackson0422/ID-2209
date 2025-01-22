@@ -1,0 +1,261 @@
+model Festival
+
+global {
+	int numberOfPeople <- 10;    // 初始化人的数量
+	int numberOfStore <- 4 ;     // 初始化商店的数量
+	int numberOfInformationCenter <- 1;   // 初始化信息中心的数量
+	int numberOfcop <- 1;             // 初始化警察的数量
+	
+	float distanceThreshold <- 8.0;     // 距离阈值小于8.0
+	
+	init{
+		create Guest number: numberOfPeople;   // 创建人
+		create Store number: numberOfStore;   // 创建 商店
+		create InformationCenter number: numberOfInformationCenter;  // 创建信息中心
+	}
+}
+
+species Guest skills: [moving]{
+	// Initial hunger and thirst values, which decrease over time
+	float originHungryLevel <- 150.0;        // 初始化人的饥饿值
+	float originThirstyLevel <- 150.0;       // 初始化人的口渴值
+	float hungryLevel <- originHungryLevel;
+   	float thirstyLevel <- originThirstyLevel;
+   	// Record whether the guest is hungry or thirsty
+   	bool isHungry <- false;                  // 初始化人的饥饿状态
+	bool isThirsty <- false;                 // 初始化人的口渴状态
+
+	// Target Store Location
+	point targetStoreLocation;             // 目标商店位置
+	// The loaction of informationCenter
+	point informationCenterLocation;       // 信息中心位置
+	
+	/* 
+	 * When the information center reports that there is no suitable store, wait in the information center for the store to be replenished.
+	 * "shouldWaitForSupply" indicates whether to enter this state. 
+	 */ 
+	bool shouldWaitForSupply <- false;  // 需要等待商品支持吗
+	
+	aspect base{
+		rgb agentColor <- rgb("green");
+		
+		if (isHungry and isThirsty){       // 对人和状态惊醒可视化
+			agentColor <- rgb("red");             
+		} else if (isHungry){
+			agentColor <- rgb("yellow");
+		} else if (isThirsty){
+			agentColor <- rgb("blue");
+		}
+		draw circle(1.5) color: agentColor;
+	}
+	
+	
+	reflex getInformationCenter {
+		if (informationCenterLocation = nil) {
+			ask InformationCenter {
+				myself.informationCenterLocation <- location;   // 得到信息中心的位置
+			}
+		}
+	}
+	
+	// Hunger and thirst levels ​​decrease over time.
+	reflex decreaseStatusLevel{
+      if (hungryLevel > 0) {             // 随着时间的变化逐步减小饥饿值
+		int hungerDecrease <- rnd(10);
+        hungryLevel <- hungryLevel - hungerDecrease;
+      }
+      if (hungryLevel <= 50) {
+        isHungry <- true;
+      }
+      
+      if (thirstyLevel > 0) {
+		int thirstyDecrease <- rnd(5);
+        thirstyLevel <- thirstyLevel - thirstyDecrease;
+      }
+      if (thirstyLevel <= 40) {
+        isThirsty <- true;
+      }
+   }
+   
+   reflex waitForSupply when:shouldWaitForSupply = true{
+   		do interactWithInformationCenter;
+   }
+   
+	reflex move{
+		if (isHungry or isThirsty) {
+			if (targetStoreLocation = nil) {      // 如果又饿又渴且没有商店位置 就去信息中心
+				do moveToInformationCenter;
+			} else {
+				do moveToStore;                   // 否则就去商店
+			}
+		} else {
+			do wander speed: 5.0;
+		}
+	}
+	
+	// Go to store.
+	action moveToStore {
+		if ((location distance_to targetStoreLocation) < distanceThreshold) {
+			Store closestStore <- Store closest_to(self);
+			ask closestStore {
+				bool isSuccess <- refresh(myself);
+			}
+		} else {
+			do goto target: targetStoreLocation speed:10.0;
+		}
+	}
+	
+	// Go to information center.
+	action moveToInformationCenter{             // 去信息中心
+		do goto target: informationCenterLocation speed:10.0;
+		if ((location distance_to informationCenterLocation) < distanceThreshold) {
+			do interactWithInformationCenter;
+		}
+	}
+   
+   /*
+    * Interact with the information center to get the next decision.
+    * It could be to get the coordinates and go to the store; it could also be to wait until a store is restocked.
+    */ 
+	action interactWithInformationCenter{           // 开始和信息中心交互
+		write "The person go to the InformationCenter";
+		ask InformationCenter {
+			point des;
+			if (myself.isHungry and myself.isThirsty) {
+				// If the person is hungry and hunger is more severe than thirst
+				des <- getLocationByStatus(myself, "both"); 
+			} else if (myself.isHungry){
+				des <- getLocationByStatus(myself, "hunger"); 
+			} else {
+				des <- getLocationByStatus(myself, "thirst");
+			}
+			if (des = nil) {
+				myself.shouldWaitForSupply <- true;
+			} else {
+				myself.shouldWaitForSupply <- false;
+				myself.targetStoreLocation <- des;
+			}
+		}
+	}
+}
+
+species Store{                       
+	aspect base{
+		rgb agentColor <- rgb("lightgray");
+		if(foodSupply > 0 and drinkSupply >0) {     // 食物和饮料都有，就是紫色
+			agentColor <- rgb("purple");
+		} else if(drinkSupply > 0) {                // 饮料商店为橙色
+			agentColor <- rgb("orange");
+		} else if (foodSupply > 0){
+			agentColor <- rgb("darkblue");         // 食物商店为暗蓝色
+		} else{}
+		draw square(3) color: agentColor;
+	}
+	
+	// Quantity of food and drinks
+	int foodSupply <- 0;             // 食物数量
+	int drinkSupply <- 0;            // 饮品数量
+	// Time required for stock
+	int foodRestockTimeSlot <- 0;    // 食物补充时间
+	int drinkRestockTimeSlot <- 0;   // 饮料补充时间
+	
+	init {
+		foodSupply <- rnd(20);
+		drinkSupply <- rnd(20);
+	}
+	
+	reflex when:foodSupply = 0 {      // 开始上货
+		foodRestockTimeSlot <- foodRestockTimeSlot + 1;
+		if (foodRestockTimeSlot = 30) {
+			foodSupply <- rnd(20);
+			foodRestockTimeSlot <- 0;
+		}
+	}
+	
+	reflex when:drinkSupply = 0{     // 开始上饮品 
+		drinkRestockTimeSlot <- drinkRestockTimeSlot + 1;
+		if (drinkRestockTimeSlot = 30) {   // 检查补货时间槽是否达到了30
+			drinkSupply <- rnd(20);
+			drinkRestockTimeSlot <- 0;
+		}
+	}
+	
+	bool refresh(Guest guest){          // 刷新游客状态
+		if (foodSupply = 0 and drinkSupply = 0) {
+			guest.targetStoreLocation <- nil;
+			return false;
+		}
+		if (foodSupply > 0 and guest.isHungry) {
+			guest.hungryLevel <- guest.originHungryLevel;
+			guest.isHungry <- false;
+			foodSupply <- foodSupply - 1;
+		}
+		if (drinkSupply > 0 and guest.isThirsty) {
+			guest.thirstyLevel <- guest.originThirstyLevel;
+			guest.isThirsty <- false;
+			drinkSupply <- drinkSupply - 1;
+		}
+		guest.targetStoreLocation <- nil;
+		return guest.isHungry or guest.isThirsty;
+	}
+}
+
+species InformationCenter{
+	aspect base{
+		rgb agentColor <- rgb("lightpink");
+		draw square(5) color: agentColor ;
+	}
+	list<Store> allStores <- [];               // 所有商店位置
+	list<point> storeLocation <- [];           // 商店位置
+	list<Guest> badBehaviourList <- [];        // 有坏表现客人名单
+	init{
+		ask Store {
+			Store currentStore <- self;
+			point currentLocation <- location;
+			ask InformationCenter {
+				allStores <- allStores + [currentStore];
+                storeLocation <- storeLocation + [currentLocation];
+            }
+    	}
+	}
+        
+     point getLocationByStatus(Guest per, string type){          // 根据自身不同的状态选择对应的商店
+     	bool needBoth <- (type = "both") ? true : false;         // 都需要状态
+     	bool needFood <- (type = "hunger") ? true : false;       // 只要食物状态
+     	list<Store> potentialStores <- [];                       // 可以提供的商店
+     	if (needBoth){
+     		potentialStores <- allStores where (each.foodSupply > 0 and each.drinkSupply > 0);  // 如果都需要，提供的商店是全能商店
+     		if (length(potentialStores) = 0) {                      // 如果没有商店可以提供水和食物，优先提供食物
+//     			write "No store have both food and drink";
+				// If there are no stores that provide both food and drinks, give priority to stores that provide food.
+     			needBoth <- false;
+     			needFood <- true;
+     		}
+     	}
+     	if (needFood) {
+     		potentialStores <- allStores where (each.foodSupply > 0);     // 如果仅仅需要食物，提供食物商店
+     		if (length(potentialStores) = 0) {
+//     			write "No store have food";
+     			return nil;
+     		}
+		} else {
+			potentialStores <- allStores where (each.drinkSupply > 0);
+			if (length(potentialStores) = 0) {
+//     			write "No store have drink";
+     			return nil;
+     		}
+		}
+		Store closestStore <- potentialStores closest_to(per.location);    // 商店中选一个最近的
+   	 	return closestStore.location;           // 返回该坐标
+   	 }
+}
+
+experiment festivalSimulation type: gui{
+	output{
+		display festivalDisplay{
+			species Guest aspect:base;
+			species Store aspect:base;
+			species InformationCenter aspect: base;
+		}
+	}
+}
